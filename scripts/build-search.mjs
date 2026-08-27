@@ -8,6 +8,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import matter from "gray-matter";
 import * as pagefind from "pagefind";
 
@@ -105,25 +106,34 @@ function slugifyOpId(method, pathStr) {
   return `${method}_${pathStr.replace(/[^a-zA-Z0-9]+/g, "_")}`.replace(/^_+|_+$/g, "");
 }
 
+export function orderedOperations(spec) {
+  const methods = ["get", "post", "put", "patch", "delete", "options", "head"];
+  const operations = [];
+  for (const [pathStr, item] of Object.entries(spec.paths ?? {})) {
+    for (const method of methods) {
+      const op = item[method];
+      if (op) operations.push({ pathStr, method, op });
+    }
+  }
+  return operations.sort(
+    (a, b) => (a.op["x-nav-order"] ?? Infinity) - (b.op["x-nav-order"] ?? Infinity),
+  );
+}
+
 function apiRecords(root) {
   const specFile = path.join(root, "api", "openapi.json");
   if (!fs.existsSync(specFile)) return [];
   const spec = JSON.parse(fs.readFileSync(specFile, "utf8"));
-  const methods = ["get", "post", "put", "patch", "delete", "options", "head"];
   const records = [];
-  for (const [pathStr, item] of Object.entries(spec.paths ?? {})) {
-    for (const method of methods) {
-      const op = item[method];
-      if (!op) continue;
-      const operationId = op.operationId ?? slugifyOpId(method, pathStr);
-      const title = op.summary ?? operationId;
-      const content = toPlainText(
-        [op.summary, op.description, `${method.toUpperCase()} ${pathStr}`, (op.tags ?? []).join(" ")]
-          .filter(Boolean)
-          .join(" "),
-      );
-      records.push({ url: `/api-reference/${operationId}`, title, content, meta: "API reference" });
-    }
+  for (const { pathStr, method, op } of orderedOperations(spec)) {
+    const operationId = op.operationId ?? slugifyOpId(method, pathStr);
+    const title = op.summary ?? operationId;
+    const content = toPlainText(
+      [op.summary, op.description, `${method.toUpperCase()} ${pathStr}`, (op.tags ?? []).join(" ")]
+        .filter(Boolean)
+        .join(" "),
+    );
+    records.push({ url: `/api-reference/${operationId}`, title, content, meta: "API reference" });
   }
   return records;
 }
@@ -180,10 +190,8 @@ function apiResources(root) {
   const spec = JSON.parse(fs.readFileSync(specFile, "utf8"));
   const tags = new Map();
   for (const t of spec.tags ?? []) tags.set(t.name, t.description ? String(t.description).split("\n")[0].trim() : "");
-  for (const item of Object.values(spec.paths ?? {})) {
-    for (const op of Object.values(item)) {
-      if (op && Array.isArray(op.tags)) for (const t of op.tags) if (!tags.has(t)) tags.set(t, "");
-    }
+  for (const { op } of orderedOperations(spec)) {
+    if (Array.isArray(op.tags)) for (const t of op.tags) if (!tags.has(t)) tags.set(t, "");
   }
   const slug = (s) => String(s).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
   const pretty = (s) =>
@@ -434,7 +442,9 @@ async function main() {
   await writeAiSuggestions(root);
 }
 
-main().catch((err) => {
-  console.error("[markline] search index failed:", err);
-  process.exit(1);
-});
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((err) => {
+    console.error("[markline] search index failed:", err);
+    process.exit(1);
+  });
+}
