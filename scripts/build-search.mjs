@@ -8,9 +8,9 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import matter from "gray-matter";
 import * as pagefind from "pagefind";
+import { orderedResourceTags } from "./openapi-order.mjs";
 
 /** Read an env var, falling back to .env.local / .env (plain node script —
  *  Next's automatic env loading doesn't apply here). */
@@ -106,34 +106,25 @@ function slugifyOpId(method, pathStr) {
   return `${method}_${pathStr.replace(/[^a-zA-Z0-9]+/g, "_")}`.replace(/^_+|_+$/g, "");
 }
 
-export function orderedOperations(spec) {
-  const methods = ["get", "post", "put", "patch", "delete", "options", "head"];
-  const operations = [];
-  for (const [pathStr, item] of Object.entries(spec.paths ?? {})) {
-    for (const method of methods) {
-      const op = item[method];
-      if (op) operations.push({ pathStr, method, op });
-    }
-  }
-  return operations.sort(
-    (a, b) => (a.op["x-nav-order"] ?? Infinity) - (b.op["x-nav-order"] ?? Infinity),
-  );
-}
-
 function apiRecords(root) {
   const specFile = path.join(root, "api", "openapi.json");
   if (!fs.existsSync(specFile)) return [];
   const spec = JSON.parse(fs.readFileSync(specFile, "utf8"));
   const records = [];
-  for (const { pathStr, method, op } of orderedOperations(spec)) {
-    const operationId = op.operationId ?? slugifyOpId(method, pathStr);
-    const title = op.summary ?? operationId;
-    const content = toPlainText(
-      [op.summary, op.description, `${method.toUpperCase()} ${pathStr}`, (op.tags ?? []).join(" ")]
-        .filter(Boolean)
-        .join(" "),
-    );
-    records.push({ url: `/api-reference/${operationId}`, title, content, meta: "API reference" });
+  const methods = ["get", "post", "put", "patch", "delete", "options", "head"];
+  for (const [pathStr, item] of Object.entries(spec.paths ?? {})) {
+    for (const method of methods) {
+      const op = item[method];
+      if (!op) continue;
+      const operationId = op.operationId ?? slugifyOpId(method, pathStr);
+      const title = op.summary ?? operationId;
+      const content = toPlainText(
+        [op.summary, op.description, `${method.toUpperCase()} ${pathStr}`, (op.tags ?? []).join(" ")]
+          .filter(Boolean)
+          .join(" "),
+      );
+      records.push({ url: `/api-reference/${operationId}`, title, content, meta: "API reference" });
+    }
   }
   return records;
 }
@@ -188,10 +179,9 @@ function apiResources(root) {
   const specFile = path.join(root, "api", "openapi.json");
   if (!fs.existsSync(specFile)) return [];
   const spec = JSON.parse(fs.readFileSync(specFile, "utf8"));
-  const tags = new Map();
-  for (const t of spec.tags ?? []) tags.set(t.name, t.description ? String(t.description).split("\n")[0].trim() : "");
-  for (const { op } of orderedOperations(spec)) {
-    if (Array.isArray(op.tags)) for (const t of op.tags) if (!tags.has(t)) tags.set(t, "");
+  const descriptions = new Map();
+  for (const t of spec.tags ?? []) {
+    descriptions.set(t.name, t.description ? String(t.description).split("\n")[0].trim() : "");
   }
   const slug = (s) => String(s).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
   const pretty = (s) =>
@@ -199,7 +189,11 @@ function apiResources(root) {
       .replace(/[-_]/g, " ").replace(/([a-z0-9])([A-Z])/g, "$1 $2")
       .split(/\s+/).filter(Boolean)
       .map((w) => w[0].toUpperCase() + w.slice(1).toLowerCase()).join(" ");
-  return [...tags].map(([name, desc]) => ({ url: `/api-reference/${slug(name)}`, title: pretty(name), desc }));
+  return orderedResourceTags(spec).map((name) => ({
+    url: `/api-reference/${slug(name)}`,
+    title: pretty(name),
+    desc: descriptions.get(name) ?? "",
+  }));
 }
 
 function writeLlms(root) {
@@ -442,9 +436,7 @@ async function main() {
   await writeAiSuggestions(root);
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  main().catch((err) => {
-    console.error("[markline] search index failed:", err);
-    process.exit(1);
-  });
-}
+main().catch((err) => {
+  console.error("[markline] search index failed:", err);
+  process.exit(1);
+});

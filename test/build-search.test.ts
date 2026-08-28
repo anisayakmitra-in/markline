@@ -1,33 +1,21 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-type Operation = {
-  op: {
-    operationId: string;
-  };
-};
+type OrderedResourceTags = (spec: object) => string[];
 
-type OrderedOperations = (spec: object) => Operation[];
-
-test("orderedOperations honors x-nav-order before preserving source order", async () => {
-  const modulePath = "../scripts/build-search.mjs";
-  const { orderedOperations } = await import(modulePath) as unknown as {
-    orderedOperations: OrderedOperations;
+test("orderedResourceTags keeps declared order and sorts undeclared tags", async () => {
+  const modulePath = "../scripts/openapi-order.mjs";
+  const { orderedResourceTags } = await import(modulePath) as unknown as {
+    orderedResourceTags: OrderedResourceTags;
   };
-  const operations = orderedOperations({
+  const tags = orderedResourceTags({
+    tags: [{ name: "Requests" }, { name: "Customers" }],
     paths: {
-      "/accounts": {
-        get: { operationId: "listAccounts", tags: ["accounts"] },
-        post: { operationId: "createAccount", tags: ["accounts"], "x-nav-order": 1 },
-      },
-      "/accounts/{id}": {
-        delete: { operationId: "deleteAccount", tags: ["accounts"], "x-nav-order": 2 },
-      },
+      "/webhooks": { get: { tags: ["Webhooks"] } },
+      "/events": { post: { tags: ["Events", "Requests"] } },
+      "/configuration": { patch: { tags: ["Configuration"] } },
     },
   });
 
-  assert.deepEqual(
-    operations.map(({ op }) => op.operationId),
-    ["createAccount", "deleteAccount", "listAccounts"],
-  );
+  assert.deepEqual(tags, ["Requests", "Customers", "Configuration", "Events", "Webhooks"]);
 });
